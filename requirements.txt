@@ -1,0 +1,10 @@
+# Core dependencies
+openai-agents
+openai
+python-dotenv
+pydantic
+redis
+# Development dependencies
+pytest
+pytest-asyncio
+fakeredis

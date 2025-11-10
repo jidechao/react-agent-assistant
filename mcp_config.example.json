@@ -1,0 +1,37 @@
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "protocol": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"],
+      "description": "File system access tool - allows reading and writing files in specified directory",
+      "env": {
+        "NODE_ENV": "production",
+        "DEBUG": "false"
+      }
+    },
+    {
+      "name": "github",
+      "protocol": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "description": "GitHub MCP server - provides access to GitHub repositories",
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "your_github_token_here"
+      }
+    },
+    {
+      "name": "amap-maps",
+      "protocol": "streamablehttp",
+      "url": "https://mcp.amap.com/mcp?key=your_amap_key_here",
+      "description": "高德地图 MCP server，提供了基于位置服务、地点信息搜索、路径规划、天气查询等能力"
+    },
+    {
+      "name": "custom-api",
+      "protocol": "sse",
+      "url": "http://localhost:8000/sse",
+      "description": "Custom SSE-based MCP server"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "protocol": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:\\project\\openai-agents-assisant\\react-agent-assistant"],
+      "description": "File system access tool - allows reading and writing files in specified directory"
+    },
+    {
+      "name": "tavily",
+      "protocol": "stdio",
+      "command": "npx",
+      "args": ["-y", "tavily-mcp@latest"],
+      "description": "Tavily MCP服务器提供网页搜索、数据提取、映射和爬虫工具。",
+      "env": {
+        "TAVILY_API_KEY": "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"
+      }
+    },
+    {
+      "name": "amap-maps-streamableHTTP",
+      "protocol": "streamablehttp",
+      "url": "https://mcp.amap.com/mcp?key=e66ac52d18552ff7384caf6fba407ade",
+      "description": "高德地图 MCP server，提供了基于位置服务、地点信息搜索、路径规划、天气查询等能力，让用户在出行规划、位置信息检索场景下轻松获取即时信息。"
+    }
+  ]
+}
