@@ -86,12 +86,14 @@ class MCPManager:
         elif protocol == "sse":
             return MCPManager.create_sse_server(
                 name=server_config.name,
-                url=server_config.url
+                url=server_config.url,
+                timeout=server_config.timeout
             )
         elif protocol == "streamablehttp":
             return MCPManager.create_streamablehttp_server(
                 name=server_config.name,
-                url=server_config.url
+                url=server_config.url,
+                timeout=server_config.timeout
             )
         else:
             raise MCPError(f"不支持的协议类型: {protocol}")
@@ -138,12 +140,13 @@ class MCPManager:
         )
     
     @staticmethod
-    def create_sse_server(name: str, url: str) -> MCPServerSse:
+    def create_sse_server(name: str, url: str, timeout: int | None = None) -> MCPServerSse:
         """创建SSE协议的MCP服务器
         
         Args:
             name: 服务器名称
             url: 服务器URL
+            timeout: 超时时间（秒），可选
             
         Returns:
             MCPServerSse: SSE协议的MCP服务器实例
@@ -154,23 +157,27 @@ class MCPManager:
         if not url:
             raise MCPError(f"sse协议的MCP服务器 {name} 必须提供url参数")
         
-        logger.debug(f"创建sse MCP服务器: {name}, url={url}")
+        params = {"url": url}
+        if timeout is not None and timeout > 0:
+            params["timeout"] = timeout
+            logger.debug(f"创建sse MCP服务器: {name}, url={url}, timeout={timeout}s")
+        else:
+            logger.debug(f"创建sse MCP服务器: {name}, url={url}")
         
         return MCPServerSse(
-            params={
-                "url": url
-            },
+            params=params,
             name=name,
             cache_tools_list=True  # 缓存工具列表以提高性能
         )
     
     @staticmethod
-    def create_streamablehttp_server(name: str, url: str) -> MCPServerStreamableHttp:
+    def create_streamablehttp_server(name: str, url: str, timeout: int | None = None) -> MCPServerStreamableHttp:
         """创建StreamableHTTP协议的MCP服务器
         
         Args:
             name: 服务器名称
             url: 服务器URL
+            timeout: 超时时间（秒），可选
             
         Returns:
             MCPServerStreamableHttp: StreamableHTTP协议的MCP服务器实例
@@ -181,12 +188,15 @@ class MCPManager:
         if not url:
             raise MCPError(f"streamablehttp协议的MCP服务器 {name} 必须提供url参数")
         
-        logger.debug(f"创建streamablehttp MCP服务器: {name}, url={url}")
+        params = {"url": url}
+        if timeout is not None and timeout > 0:
+            params["timeout"] = timeout
+            logger.debug(f"创建streamablehttp MCP服务器: {name}, url={url}, timeout={timeout}s")
+        else:
+            logger.debug(f"创建streamablehttp MCP服务器: {name}, url={url}")
         
         return MCPServerStreamableHttp(
-            params={
-                "url": url
-            },
+            params=params,
             name=name,
             cache_tools_list=True  # 缓存工具列表以提高性能
         )

@@ -32,6 +32,7 @@ class MCPServerConfig(BaseModel):
     args: list[str] | None = Field(None, description="命令参数（stdio协议使用）")
     url: str | None = Field(None, description="服务器URL（sse和streamablehttp协议使用）")
     env: dict[str, str] | None = Field(None, description="环境变量（可选）")
+    timeout: int | None = Field(None, description="超时时间（秒，仅SSE和StreamableHTTP协议支持）")
 
 
 class MCPConfig(BaseModel):

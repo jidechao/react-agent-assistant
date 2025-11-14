@@ -4,6 +4,7 @@ openai
 python-dotenv
 pydantic
 redis
+websockets
 # Development dependencies
 pytest
 pytest-asyncio
