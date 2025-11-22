@@ -5,6 +5,7 @@
 
 import sys
 import logging
+import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -115,11 +116,74 @@ class CLI:
                 
                 # 调用Agent处理输入并流式输出
                 try:
+                    # 重置思考状态标记
+                    if hasattr(self, '_thinking_started'):
+                        delattr(self, '_thinking_started')
+                    
                     print("\n🤖 助手: ", end="", flush=True)
                     
-                    # 使用流式方法获取响应
-                    async for text_delta in self.agent.run_with_stream(user_input):
-                        self.print_assistant_output(text_delta, end="")
+                    # 使用流式方法获取响应（包含所有事件：思考、工具调用、文本增量等）
+                    async for event in self.agent.run_with_stream_and_events(user_input):
+                        event_type = event.get("type")
+                        
+                        if event_type == "think":
+                            # 显示思考过程（流式输出）
+                            think_content = event.get("content", "")
+                            if think_content:
+                                # 如果是第一次显示思考，添加前缀
+                                if not hasattr(self, '_thinking_started'):
+                                    print("\n💭 思考: ", end="", flush=True)
+                                    self._thinking_started = True
+                                # 流式输出思考内容
+                                print(think_content, end="", flush=True)
+                        
+                        elif event_type == "tool_call":
+                            # 显示工具调用
+                            # 如果之前有思考内容，先换行
+                            if hasattr(self, '_thinking_started'):
+                                print()  # 思考内容结束，换行
+                                delattr(self, '_thinking_started')
+                            
+                            tool_name = event.get("tool_name", "unknown")
+                            arguments = event.get("arguments", {})
+                            print(f"\n🔧 调用工具: {tool_name}")
+                            if arguments:
+                                args_str = json.dumps(arguments, ensure_ascii=False, indent=2)
+                                print(f"   参数: {args_str}")
+                            print("🤖 助手: ", end="", flush=True)
+                        
+                        elif event_type == "tool_output":
+                            # 显示工具输出
+                            # 如果之前有思考内容，先换行
+                            if hasattr(self, '_thinking_started'):
+                                print()  # 思考内容结束，换行
+                                delattr(self, '_thinking_started')
+                            
+                            tool_output = event.get("output", "")
+                            if tool_output:
+                                # 限制输出长度，避免过长
+                                output_str = str(tool_output)
+                                if len(output_str) > 500:
+                                    output_str = output_str[:500] + "... (输出已截断)"
+                                print(f"\n✅ 工具结果: {output_str}")
+                            print("🤖 助手: ", end="", flush=True)
+                        
+                        elif event_type == "text_delta":
+                            # 显示文本增量（最终答案）
+                            # 如果之前有思考内容，先换行并重置标记
+                            if hasattr(self, '_thinking_started'):
+                                print()  # 思考内容结束，换行
+                                delattr(self, '_thinking_started')
+                            
+                            text_delta = event.get("content", "")
+                            if text_delta:
+                                self.print_assistant_output(text_delta, end="")
+                        
+                        elif event_type == "complete":
+                            # 完成事件，清理思考状态标记
+                            if hasattr(self, '_thinking_started'):
+                                delattr(self, '_thinking_started')
+                            pass
                     
                     # 输出完成后换行
                     print()

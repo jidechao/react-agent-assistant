@@ -182,8 +182,58 @@ class WebSocketHandler:
         
         try:
             # 使用流式方法处理消息（包含工具调用事件）
+            # 对于 think 事件，转换为 text_delta 事件发送，实现打字机效果的流式输出
+            # 这样前端会将内容追加到同一个消息中，而不是创建新消息
+            has_tool_call = False
+            has_tool_output = False  # 标记是否有工具输出
+            think_was_converted = False  # 标记是否将 think 转换为 text_delta 发送过
+            
             async for event in agent.run_with_stream_and_events(content):
-                await self._send_message(websocket, event)
+                event_type = event.get("type")
+                
+                if event_type == "think":
+                    # 将 think 事件转换为 text_delta 事件发送
+                    # 这样前端会将内容追加到同一个消息中，实现打字机效果
+                    think_was_converted = True
+                    await self._send_message(websocket, {
+                        "type": "text_delta",
+                        "content": event.get("content", "")
+                    })
+                
+                elif event_type == "tool_call":
+                    # 标记有工具调用
+                    has_tool_call = True
+                    think_was_converted = False  # 有工具调用后，后续的 text_delta 是最终答案，需要显示
+                    # 发送工具调用事件
+                    await self._send_message(websocket, event)
+                
+                elif event_type == "tool_output":
+                    # 标记有工具输出
+                    has_tool_output = True
+                    # 发送工具输出事件
+                    await self._send_message(websocket, event)
+                
+                elif event_type == "text_delta":
+                    # text_delta 事件处理：
+                    # 核心逻辑：如果 think 已经转换为 text_delta 且没有工具调用，这是重复的，完全不发送
+                    # 因为 think 事件已经作为 text_delta 流式发送过了
+                    if think_was_converted and not has_tool_call:
+                        # 如果 think 已经转换为 text_delta 且没有工具调用，这是重复的，完全不发送
+                        # 因为 think 事件已经作为 text_delta 流式发送过了
+                        continue  # 跳过，不发送
+                    elif has_tool_output:
+                        # 工具输出后的 text_delta 是最终答案，必须发送
+                        await self._send_message(websocket, event)
+                    elif not think_was_converted and not has_tool_call:
+                        # 没有 think 的直接回答，需要发送
+                        await self._send_message(websocket, event)
+                    else:
+                        # 其他情况（有工具调用但还没有工具输出）也不发送，避免中间过程的重复
+                        continue  # 跳过，不发送
+                
+                else:
+                    # 其他事件（complete等）
+                    await self._send_message(websocket, event)
         
         except Exception as e:
             logger.error(f"处理用户消息失败: {e}", exc_info=True)
@@ -320,14 +370,50 @@ class WebSocketHandler:
             # 创建临时会话以获取历史记录
             from .session_manager import SessionManager
             
-            session = SessionManager.create_session(
-                session_id=session_id,
-                storage_type=self.storage_type,
-                redis_url=self.redis_url
-            )
+            try:
+                session = SessionManager.create_session(
+                    session_id=session_id,
+                    storage_type=self.storage_type,
+                    redis_url=self.redis_url
+                )
+            except Exception as e:
+                logger.error(f"创建会话失败: {e}", exc_info=True)
+                # 如果Redis连接失败，尝试使用SQLite降级
+                if self.storage_type == "redis":
+                    logger.warning(f"Redis连接失败，尝试使用SQLite降级: {e}")
+                    try:
+                        session = SessionManager.create_session(
+                            session_id=session_id,
+                            storage_type="sqlite",
+                            redis_url=None
+                        )
+                    except Exception as fallback_error:
+                        logger.error(f"SQLite降级也失败: {fallback_error}", exc_info=True)
+                        await self._send_error(websocket, f"加载历史记录失败: 无法创建会话。Redis连接失败: {str(e)}")
+                        return
+                else:
+                    await self._send_error(websocket, f"创建会话失败: {str(e)}")
+                    return
             
             # 获取历史记录
-            items = await session.get_items()
+            try:
+                items = await session.get_items()
+            except Exception as e:
+                logger.error(f"获取历史记录失败: {e}", exc_info=True)
+                # 如果是Redis连接错误，提供更友好的错误信息
+                if "redis" in str(e).lower() or "connection" in str(e).lower():
+                    error_msg = (
+                        f"Redis连接失败: {str(e)}。"
+                        "请确保Redis服务正在运行。"
+                        "您可以：\n"
+                        "1. 启动Redis服务\n"
+                        "2. 检查REDIS_URL配置是否正确\n"
+                        "3. 检查Redis服务是否可访问"
+                    )
+                    await self._send_error(websocket, error_msg)
+                else:
+                    await self._send_error(websocket, f"获取历史记录失败: {str(e)}")
+                return
             
             logger.info(f"加载会话 {session_id} 的历史记录，共 {len(items)} 条原始记录")
             
@@ -357,14 +443,7 @@ class WebSocketHandler:
                         if hasattr(item, 'output'):
                             item_dict['output'] = getattr(item, 'output', None)
                     
-                    # 调试：记录消息类型和内容
                     item_type = item_dict.get('type', None)
-                    logger.info(f"历史消息 {idx}: type={item_type}, role={item_dict.get('role')}, keys={list(item_dict.keys())}")
-                    # 如果是字典格式，记录完整内容
-                    if isinstance(item, dict):
-                        logger.info(f"历史消息 {idx} 完整内容: {json.dumps(item, ensure_ascii=False, default=str)[:500]}")
-                    elif hasattr(item, '__dict__'):
-                        logger.info(f"历史消息 {idx} 对象属性: {list(item.__dict__.keys())}")
                     
                     # 检查消息类型
                     
@@ -384,8 +463,6 @@ class WebSocketHandler:
                         if not item_id:
                             import time
                             item_id = f"tool_call_{session_id}_{idx}_{int(time.time() * 1000)}"
-                        
-                        logger.info(f"识别到工具调用消息: {tool_name}, 参数: {tool_args}")
                         
                         history_messages.append({
                             "id": item_id,
@@ -408,8 +485,6 @@ class WebSocketHandler:
                         if not item_id:
                             import time
                             item_id = f"tool_output_{session_id}_{idx}_{int(time.time() * 1000)}"
-                        
-                        logger.info(f"识别到工具输出消息: {tool_name}")
                         
                         history_messages.append({
                             "id": item_id,
@@ -489,8 +564,6 @@ class WebSocketHandler:
                                 import time
                                 item_id = f"tool_call_{session_id}_{idx}_{int(time.time() * 1000)}"
                             
-                            logger.info(f"识别到字典格式的工具调用消息: {tool_name}")
-                            
                             history_messages.append({
                                 "id": item_id,
                                 "type": "tool_call",
@@ -511,8 +584,6 @@ class WebSocketHandler:
                             if not item_id:
                                 import time
                                 item_id = f"tool_output_{session_id}_{idx}_{int(time.time() * 1000)}"
-                            
-                            logger.info(f"识别到字典格式的工具输出消息: {tool_name}")
                             
                             history_messages.append({
                                 "id": item_id,
@@ -591,12 +662,6 @@ class WebSocketHandler:
             })
             
             logger.info(f"已加载会话 {session_id} 的历史记录，共 {len(history_messages)} 条")
-            # 调试：记录所有消息类型
-            message_types = {}
-            for msg in history_messages:
-                msg_type = msg.get('type', 'unknown')
-                message_types[msg_type] = message_types.get(msg_type, 0) + 1
-            logger.info(f"消息类型统计: {message_types}")
         
         except Exception as e:
             logger.error(f"加载历史记录失败: {e}", exc_info=True)
@@ -646,6 +711,9 @@ class WebSocketHandler:
         """
         try:
             message = json.dumps(data, ensure_ascii=False)
+            # 记录think消息的发送详情
+            if data.get("type") == "think":
+                logger.info(f"📨 WebSocket发送think消息，长度: {len(message)} 字节")
             await websocket.send(message)
         except Exception as e:
             logger.error(f"发送消息失败: {e}", exc_info=True)

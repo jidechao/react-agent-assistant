@@ -190,18 +190,43 @@ class ReactAgent:
             # 处理流式事件
             current_text_buffer = ""  # 用于累积文本，检测思考阶段
             last_event_was_tool_call = False  # 跟踪上一个事件是否是工具调用
+            has_sent_think = False  # 跟踪是否已经发送过think消息（避免重复）
+            is_after_tool_output = False  # 跟踪是否在工具输出之后（此时文本应该是最终答案）
+            is_thinking_phase = False  # 跟踪是否在思考阶段（工具调用之前）
+            has_called_tool = False  # 跟踪是否调用过工具（用于判断是否应该发送最终答案）
+            think_was_sent = False  # 跟踪是否实际发送过think事件（用于避免重复显示）
             
             async for event in result.stream_events():
+                # 记录所有事件类型以便调试
+                logger.debug(f"收到事件: type={event.type}, is_after_tool_output={is_after_tool_output}, current_buffer_len={len(current_text_buffer)}")
+                
                 # 处理文本增量事件
                 if event.type == "raw_response_event" and isinstance(
                     event.data, ResponseTextDeltaEvent
                 ):
                     if event.data.delta:
                         current_text_buffer += event.data.delta
-                        yield {
-                            "type": "text_delta",
-                            "content": event.data.delta
-                        }
+                        
+                        # 如果已经在工具输出之后，文本增量应该作为最终答案的一部分立即流式发送
+                        if is_after_tool_output:
+                            yield {
+                                "type": "text_delta",
+                                "content": event.data.delta
+                            }
+                        # 如果还没有调用过工具，说明在思考阶段，也应该流式输出
+                        elif not has_sent_think:
+                            # 流式输出思考内容
+                            yield {
+                                "type": "think",
+                                "content": event.data.delta
+                            }
+                            is_thinking_phase = True
+                            think_was_sent = True  # 标记已发送过think事件
+                            # 注意：这里不设置 has_sent_think，因为思考内容可能持续多个增量
+                            # has_sent_think 会在工具调用时设置
+                            # 注意：current_text_buffer 继续累积，用于最后的判断
+                            # 但最后如果 think_was_sent 为 True，不会发送 text_delta
+                        # 否则累积起来（这种情况应该很少，因为工具调用后应该立即设置 is_after_tool_output）
                         last_event_was_tool_call = False
                 
                 # 处理 run_item_stream_event - 这是 agents SDK 中工具调用和输出的主要事件类型
@@ -211,16 +236,19 @@ class ReactAgent:
                     
                     # 处理工具调用
                     if item_type == "tool_call_item":
-                        # 在工具调用前，如果有累积的文本，可能是思考内容
-                        if current_text_buffer.strip() and not last_event_was_tool_call:
-                            think_content = current_text_buffer.strip()
-                            if any(keyword in think_content for keyword in ["思考", "需要", "应该", "让我", "我将", "首先", "然后"]):
-                                yield {
-                                    "type": "think",
-                                    "content": think_content
-                                }
+                        # 在工具调用前，如果有累积的文本且还没有发送过think，说明是第一次工具调用
+                        # 由于思考内容已经在流式输出中发送了，这里只需要标记
+                        if not has_sent_think:
+                            has_sent_think = True
+                            is_thinking_phase = False
+                        
+                        # 标记已调用过工具
+                        has_called_tool = True
+                        
+                        # 清空文本缓冲区
                         current_text_buffer = ""
                         last_event_was_tool_call = True
+                        is_after_tool_output = False
                         
                         # 获取工具名称和参数
                         # ToolCallItem 有一个 raw_item 属性，包含 ResponseFunctionToolCall 对象
@@ -323,6 +351,7 @@ class ReactAgent:
                     # 处理工具输出
                     elif item_type == "tool_call_output_item":
                         last_event_was_tool_call = False
+                        is_after_tool_output = True  # 标记工具输出已完成，后续文本是最终答案
                         
                         # 获取工具名称和输出
                         # ToolCallOutputItem 可能也有 raw_item 属性
@@ -412,9 +441,27 @@ class ReactAgent:
             
             # 发送完成事件
             # 如果有剩余的文本缓冲区内容，确保它被作为最终答案处理
+            # 逻辑说明：
+            # 1. 在工具输出之后（is_after_tool_output）- 文本增量已经在流式过程中作为text_delta发送了，
+            #    不应该再发送current_text_buffer中的内容，避免重复
+            # 2. 没有发送过think事件且没有调用过工具 - 这是直接回答（没有思考过程），需要发送text_delta
+            # 3. 发送过think事件但没有调用过工具 - 思考内容已经作为think事件流式发送了，
+            #    不应该再发送text_delta，避免重复显示
+            #    注意：CLI端会正常显示think事件，不需要text_delta；Web端也会正常显示think事件
+            if current_text_buffer.strip():
+                if is_after_tool_output:
+                    # 工具输出后的文本增量已经在流式过程中作为text_delta发送了
+                    # current_text_buffer中的内容都是已经发送过的，不应该再发送，避免重复
+                    pass
+                elif not think_was_sent and not has_called_tool:
+                    # 没有思考过程，直接回答，需要发送text_delta
+                    yield {
+                        "type": "text_delta",
+                        "content": current_text_buffer
+                    }
+                # 如果发送过think但没有调用工具，不发送text_delta，避免重复
+                # CLI端已经通过think事件显示了内容，不需要text_delta
             yield {"type": "complete"}
-            
-            logger.debug("流式处理完成（包含事件）")
             
         except Exception as e:
             logger.error(f"流式Agent执行失败: {e}")
